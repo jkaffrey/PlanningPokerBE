@@ -17,7 +17,10 @@ app.use(express.static("public"));
 let sessions = {};
 
 io.on("connection", (socket) => {
-  console.log("a user connected");
+  socket.on("health-check", ({ sessionId }) => {
+    let sessionExists = !!sessions[sessionId];
+    socket.emit("health-callback", { sessionHealthy: sessionExists });
+  });
 
   socket.on("create-session", ({ adminUsername }) => {
     const sessionId = uuidv4();
@@ -33,7 +36,6 @@ io.on("connection", (socket) => {
   });
 
   socket.on("join-session", ({ sessionId, username }) => {
-    console.log(sessions[sessionId]);
     if (sessions[sessionId]) {
       socket.join(sessionId);
       socket.sessionId = sessionId;
@@ -42,7 +44,6 @@ io.on("connection", (socket) => {
         sessions[sessionId].users.push(username);
       }
       if (sessions[sessionId].adminUsername === username) {
-        console.log("Admin joined");
         sessions[sessionId].admin = socket.id;
       }
       io.to(sessionId).emit("user-joined", {
@@ -63,7 +64,6 @@ io.on("connection", (socket) => {
     const sessionId = socket.sessionId;
     if (sessionId && sessions[sessionId] && !sessions[sessionId].reveal) {
       sessions[sessionId].votes[socket.username] = vote;
-      console.log(sessions[sessionId].votes);
       io.to(sessionId).emit("vote", { username: socket.username, vote });
     }
   });
@@ -133,7 +133,6 @@ io.on("connection", (socket) => {
         votingActive: sessions[sessionId].votingActive,
         sessionVotes: sessions[sessionId].votes,
       });
-      // io.to(sessionId).emit('user-renamed', { users: sessions[sessionId].users, votes: sessions[sessionId].votes });
     }
   });
 
@@ -142,13 +141,11 @@ io.on("connection", (socket) => {
       sessions[sessionId].users = sessions[sessionId].users.filter(
         (user) => user !== socket.username
       );
-      // delete sessions[sessionId].votes[socket.username];
       io.to(sessionId).emit("user-left", {
         username: socket.username,
         users: sessions[sessionId].users,
       });
     });
-    console.log("user disconnected");
   });
 });
 
