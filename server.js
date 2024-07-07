@@ -31,6 +31,7 @@ io.on("connection", (socket) => {
       reveal: false,
       votingActive: false,
       adminUsername: adminUsername,
+      planSizingTechnique: "fibonacci",
     };
     socket.emit("session-created", sessionId);
   });
@@ -54,10 +55,19 @@ io.on("connection", (socket) => {
         revealVotes: sessions[sessionId].reveal,
         votingActive: sessions[sessionId].votingActive,
         sessionVotes: sessions[sessionId].votes,
+        planSizingTechnique: sessions[sessionId].planSizingTechnique,
       });
     } else {
       socket.emit("error", "Session not found");
     }
+  });
+
+  socket.on("change-sizing-technique", ({ sessionId, technique }) => {
+    if (!(sessions[sessionId] && sessions[sessionId].admin === socket.id))
+      return;
+    sessions[sessionId].planSizingTechnique = technique;
+    sessions[sessionId].votes = {};
+    io.to(sessionId).emit("sizing-technique-changed", { technique });
   });
 
   socket.on("vote", (vote) => {
