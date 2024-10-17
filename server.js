@@ -32,6 +32,7 @@ io.on("connection", (socket) => {
       votingActive: false,
       adminUsername: adminUsername,
       planSizingTechnique: "fibonacci",
+      history: [],
     };
     socket.emit("session-created", sessionId);
   });
@@ -41,12 +42,22 @@ io.on("connection", (socket) => {
       socket.join(sessionId);
       socket.sessionId = sessionId;
       socket.username = username;
+
+      if (
+        sessions[sessionId].adminUsername === username ||
+        !sessions[sessionId].adminUsername
+      ) {
+        if (sessions[sessionId].deleteTimeout) {
+          clearTimeout(sessions[sessionId].deleteTimeout);
+          delete sessions[sessionId].deleteTimeout; // Clean up the timeout reference
+        }
+        sessions[sessionId].admin = socket.id;
+      }
+
       if (!sessions[sessionId].users.includes(username)) {
         sessions[sessionId].users.push(username);
       }
-      if (sessions[sessionId].adminUsername === username) {
-        sessions[sessionId].admin = socket.id;
-      }
+
       io.to(sessionId).emit("user-joined", {
         username,
         users: sessions[sessionId].users,
@@ -56,10 +67,21 @@ io.on("connection", (socket) => {
         votingActive: sessions[sessionId].votingActive,
         sessionVotes: sessions[sessionId].votes,
         planSizingTechnique: sessions[sessionId].planSizingTechnique,
+        history: sessions[sessionId].history,
       });
     } else {
-      socket.emit("error", "Session not found");
+      socket.emit("error", {
+        title: "Session Not Found",
+        message:
+          "This session you are attempting to connect to does not exist.",
+      });
     }
+  });
+
+  socket.on("add-history-event", ({ sessionId, historyEvent }) => {
+    // console.log("History event added: ", historyEvent);
+    sessions[sessionId].history.push(historyEvent);
+    io.to(sessionId).emit("history-updated", sessions[sessionId].history);
   });
 
   socket.on("change-sizing-technique", ({ sessionId, technique }) => {
@@ -142,20 +164,41 @@ io.on("connection", (socket) => {
         revealVotes: sessions[sessionId].reveal,
         votingActive: sessions[sessionId].votingActive,
         sessionVotes: sessions[sessionId].votes,
+        planSizingTechnique: sessions[sessionId].planSizingTechnique,
+        history: sessions[sessionId].history,
       });
     }
   });
 
   socket.on("disconnect", () => {
-    Object.keys(sessions).forEach((sessionId) => {
-      sessions[sessionId].users = sessions[sessionId].users.filter(
-        (user) => user !== socket.username
-      );
-      io.to(sessionId).emit("user-left", {
-        username: socket.username,
-        users: sessions[sessionId].users,
-      });
+    const sessionId = socket.sessionId;
+    if (!sessions[sessionId]) return;
+
+    // Remove user from the specific session they are in
+    sessions[sessionId].users = sessions[sessionId].users.filter(
+      (user) => user !== socket.username
+    );
+
+    io.to(sessionId).emit("user-left", {
+      username: socket.username,
+      users: sessions[sessionId].users,
     });
+
+    // Check if the disconnected user is the admin
+    if (sessions[sessionId].admin === socket.id) {
+      // Set a timeout to delete the session after 30 seconds
+      const deleteSessionTimeout = setTimeout(() => {
+        io.to(sessionId).emit("error", {
+          title: "The Host Has Left",
+          message:
+            "This session is no longer active since the host has left for more than 30 seconds.",
+        });
+        delete sessions[sessionId];
+      }, 30000); // 30 seconds
+
+      // Store the timeout ID so it can be cleared if the admin reconnects
+      sessions[sessionId].deleteTimeout = deleteSessionTimeout;
+    }
   });
 });
 
