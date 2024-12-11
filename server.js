@@ -23,7 +23,11 @@ io.on("connection", (socket) => {
     socket.emit("health-callback", { sessionHealthy: sessionExists });
   });
 
-  socket.on("create-session", ({ adminUsername }) => {
+  socket.on("create-session", ({ adminUsername, oldSessionId }) => {
+    if (oldSessionId) {
+      socket.leave(oldSessionId);
+    }
+
     const sessionId = uuidv4();
     sessions[sessionId] = {
       admin: socket.id,
