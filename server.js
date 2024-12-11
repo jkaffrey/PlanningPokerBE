@@ -15,6 +15,7 @@ const io = new Server(server, {
 
 app.use(express.static("public"));
 let sessions = {};
+const INACTIVITY_TIMEOUT = 60 * 60 * 1000; // 60 minutes for inactive sessions to be cleaned up
 
 io.on("connection", (socket) => {
   socket.on("health-check", ({ sessionId }) => {
@@ -42,6 +43,11 @@ io.on("connection", (socket) => {
       socket.join(sessionId);
       socket.sessionId = sessionId;
       socket.username = username;
+
+      if (!sessions[sessionId].userTimers) {
+        sessions[sessionId].userTimers = {};
+      }
+      resetInactiveSessionTimer(sessionId, socket);
 
       if (
         sessions[sessionId].adminUsername === username ||
@@ -80,8 +86,8 @@ io.on("connection", (socket) => {
 
   socket.on("add-history-event", ({ sessionId, historyEvent }) => {
     // console.log("History event added: ", historyEvent);
-    sessions[sessionId].history.push(historyEvent);
-    io.to(sessionId).emit("history-updated", sessions[sessionId].history);
+    // sessions[sessionId].history.push(historyEvent);
+    // io.to(sessionId).emit("history-updated", sessions[sessionId].history);
   });
 
   socket.on("change-sizing-technique", ({ sessionId, technique }) => {
@@ -170,6 +176,25 @@ io.on("connection", (socket) => {
     }
   });
 
+  // Reset inactivity timer on user activity
+  const activityEvents = [
+    "vote",
+    "add-history-event",
+    "change-sizing-technique",
+    "start-the-voting",
+    "reveal-votes",
+    "restart-voting",
+    "admin-input",
+  ];
+
+  activityEvents.forEach((event) => {
+    socket.on(event, (data) => {
+      if (socket.sessionId) {
+        resetInactiveSessionTimer(socket.sessionId, socket);
+      }
+    });
+  });
+
   socket.on("disconnect", () => {
     const sessionId = socket.sessionId;
     if (!sessions[sessionId]) return;
@@ -178,6 +203,12 @@ io.on("connection", (socket) => {
     sessions[sessionId].users = sessions[sessionId].users.filter(
       (user) => user !== socket.username
     );
+
+    // Clear inactivity timer for session
+    if (sessions[sessionId].userTimers) {
+      clearTimeout(sessions[sessionId].userTimer);
+      delete sessions[sessionId].userTimers;
+    }
 
     io.to(sessionId).emit("user-left", {
       username: socket.username,
@@ -199,8 +230,43 @@ io.on("connection", (socket) => {
       // Store the timeout ID so it can be cleared if the admin reconnects
       sessions[sessionId].deleteTimeout = deleteSessionTimeout;
     }
+
+    // New logic
+    socket.leave(sessionId);
+    delete socket.sessionId;
+    delete socket.username;
   });
 });
+
+function resetInactiveSessionTimer(sessionId, socket) {
+  if (!sessions[sessionId]) return;
+
+  if (!sessions[sessionId].userTimers) {
+    sessions[sessionId].userTimers = null;
+  }
+
+  if (sessions[sessionId].userTimers) {
+    clearTimeout(sessions[sessionId].userTimers);
+  }
+
+  sessions[sessionId].userTimers = setTimeout(() => {
+    // Notify the users
+    io.to(sessionId).emit("error", {
+      title: "Inactivity Timeout",
+      message:
+        "This session has been deleted, due to an hour of inactivity by all participants.",
+    });
+
+    // Remove the user from the room
+    socket.leave(sessionId);
+    if (sessions[sessionId]?.deleteTimeout) {
+      clearTimeout(sessions[sessionId].deleteTimeout);
+    }
+    delete sessions[sessionId];
+    delete socket.sessionId;
+    delete socket.username;
+  }, INACTIVITY_TIMEOUT);
+}
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
